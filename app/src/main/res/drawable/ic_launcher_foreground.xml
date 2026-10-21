@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Code terminal chevron '>' in Claude warm terracotta -->
+    <path
+        android:fillColor="#CC5500"
+        android:pathData="M32,34 L48,54 L32,74 L40,80 L62,54 L40,28 Z" />
+    <!-- Terminal cursor block '_' -->
+    <path
+        android:fillColor="#8C887B"
+        android:pathData="M52,72 L74,72 L74,80 L52,80 Z" />
+    <!-- Claude Warm Spark -->
+    <path
+        android:fillColor="#C86236"
+        android:pathData="M70,30 C70,37 77,44 84,44 C77,44 70,51 70,58 C70,51 63,44 56,44 C63,44 70,37 70,30 Z" />
+</vector>

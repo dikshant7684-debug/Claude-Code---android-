@@ -1,0 +1,6 @@
+{
+  "name": "Claude Code",
+  "description": "Claude Code - AI coding companion and developer assistant for Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
