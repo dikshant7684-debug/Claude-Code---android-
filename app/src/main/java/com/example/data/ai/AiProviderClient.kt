@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 
 sealed class AiStreamChunk {
   data class ContentDelta(val text: String) : AiStreamChunk()
+  data class ReasoningDelta(val text: String) : AiStreamChunk()
   data class ToolCallDelta(val toolName: String, val argumentDelta: String) : AiStreamChunk()
   data class Error(val message: String) : AiStreamChunk()
   object Done : AiStreamChunk()
@@ -35,9 +36,9 @@ data class ChatMessage(
 class AiProviderClient {
 
   private val client: OkHttpClient = OkHttpClient.Builder()
-    .connectTimeout(30, TimeUnit.SECONDS)
-    .readTimeout(120, TimeUnit.SECONDS)
-    .writeTimeout(30, TimeUnit.SECONDS)
+    .connectTimeout(20, TimeUnit.SECONDS)
+    .readTimeout(30, TimeUnit.SECONDS)
+    .writeTimeout(20, TimeUnit.SECONDS)
     .build()
 
   private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -268,7 +269,14 @@ class AiProviderClient {
     val choices = jsonRes.optJSONArray("choices")
     if (choices != null && choices.length() > 0) {
       val message = choices.getJSONObject(0).optJSONObject("message")
-      val content = message?.optString("content") ?: ""
+      val rawContent = message?.optString("content")
+      val reasoning = message?.optString("reasoning_content")?.takeIf { it.isNotBlank() && it != "null" }
+        ?: message?.optString("reasoning")?.takeIf { it.isNotBlank() && it != "null" }
+      val content = if (!rawContent.isNullOrBlank() && rawContent != "null") {
+        rawContent
+      } else {
+        reasoning ?: ""
+      }
       Result.success(content)
     } else {
       Result.failure(IOException("Empty response from AI provider"))
@@ -338,9 +346,14 @@ class AiProviderClient {
           val choices = chunkJson.optJSONArray("choices")
           if (choices != null && choices.length() > 0) {
             val delta = choices.getJSONObject(0).optJSONObject("delta")
-            val content = delta?.optString("content")
-            if (!content.isNullOrEmpty()) {
-              emit(AiStreamChunk.ContentDelta(content))
+            val rawContent = delta?.optString("content")
+            val reasoning = delta?.optString("reasoning_content")?.takeIf { it.isNotBlank() && it != "null" }
+              ?: delta?.optString("reasoning")?.takeIf { it.isNotBlank() && it != "null" }
+
+            if (!rawContent.isNullOrBlank() && rawContent != "null") {
+              emit(AiStreamChunk.ContentDelta(rawContent))
+            } else if (!reasoning.isNullOrBlank() && reasoning != "null") {
+              emit(AiStreamChunk.ReasoningDelta(reasoning))
             }
           }
         } catch (_: Exception) {

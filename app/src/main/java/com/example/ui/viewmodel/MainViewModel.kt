@@ -13,8 +13,10 @@ import com.example.data.database.ChatRepository
 import com.example.data.database.ProjectMemoryRepository
 import com.example.data.files.ProjectFileManager
 import com.example.data.model.AgentTask
+import com.example.data.model.ConversationSession
 import com.example.data.model.FileChange
 import com.example.data.model.MessageRole
+import com.example.data.model.MessageStatus
 import com.example.data.model.Project
 import com.example.data.model.ProjectFile
 import com.example.data.model.ProjectType
@@ -118,13 +120,124 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
   val currentTask: StateFlow<AgentTask?> = agentEngine.currentTask
 
+  // Mode selection: false = Chat mode, true = Code mode
+  private val _isCodeMode = MutableStateFlow(false)
+  val isCodeMode: StateFlow<Boolean> = _isCodeMode.asStateFlow()
+
+  fun setCodeMode(isCode: Boolean) {
+    _isCodeMode.value = isCode
+  }
+
+  // Conversation sessions management
+  private val _conversations = MutableStateFlow<List<ConversationSession>>(emptyList())
+  val conversations: StateFlow<List<ConversationSession>> = _conversations.asStateFlow()
+
+  private val _activeConversationId = MutableStateFlow<String?>(null)
+  val activeConversationId: StateFlow<String?> = _activeConversationId.asStateFlow()
+
   // Conversational AI Chat messages
   private val _chatMessages = MutableStateFlow<List<UiChatMessage>>(emptyList())
   val chatMessages: StateFlow<List<UiChatMessage>> = _chatMessages.asStateFlow()
 
   init {
     initDefaultWorkspace()
+    loadConversationsMeta()
     loadPersistedChatMessages()
+  }
+
+  fun startNewConversation() {
+    val newId = UUID.randomUUID().toString()
+    val newSession = ConversationSession(
+      id = newId,
+      title = "New Chat",
+      lastUpdated = System.currentTimeMillis()
+    )
+    _conversations.value = listOf(newSession) + _conversations.value
+    _activeConversationId.value = newId
+    _chatMessages.value = emptyList()
+    _isCodeMode.value = false
+    agentEngine.cancelCurrentTask()
+    saveConversationsMeta()
+  }
+
+  fun selectConversation(session: ConversationSession) {
+    _activeConversationId.value = session.id
+    _isCodeMode.value = false
+  }
+
+  fun toggleStarConversation(id: String) {
+    _conversations.value = _conversations.value.map {
+      if (it.id == id) it.copy(isStarred = !it.isStarred) else it
+    }
+    saveConversationsMeta()
+  }
+
+  fun deleteConversation(id: String) {
+    _conversations.value = _conversations.value.filter { it.id != id }
+    if (_activeConversationId.value == id) {
+      if (_conversations.value.isNotEmpty()) {
+        selectConversation(_conversations.value.first())
+      } else {
+        startNewConversation()
+      }
+    }
+    saveConversationsMeta()
+  }
+
+  private fun loadConversationsMeta() {
+    try {
+      val file = java.io.File(getApplication<Application>().filesDir, "conversations_meta.json")
+      if (file.exists()) {
+        val text = file.readText()
+        val jsonArr = org.json.JSONArray(text)
+        val list = mutableListOf<ConversationSession>()
+        for (i in 0 until jsonArr.length()) {
+          val obj = jsonArr.getJSONObject(i)
+          list.add(
+            ConversationSession(
+              id = obj.getString("id"),
+              title = obj.getString("title"),
+              lastUpdated = obj.getLong("lastUpdated"),
+              isStarred = obj.optBoolean("isStarred", false),
+              previewText = obj.optString("previewText", "")
+            )
+          )
+        }
+        if (list.isNotEmpty()) {
+          _conversations.value = list
+          _activeConversationId.value = list.first().id
+          return
+        }
+      }
+    } catch (_: Exception) {}
+
+    // Default initial conversation
+    val initialSession = ConversationSession(
+      title = "Android Development",
+      lastUpdated = System.currentTimeMillis(),
+      previewText = "Welcome to Claude Code on Android"
+    )
+    _conversations.value = listOf(initialSession)
+    _activeConversationId.value = initialSession.id
+    saveConversationsMeta()
+  }
+
+  private fun saveConversationsMeta() {
+    try {
+      val file = java.io.File(getApplication<Application>().filesDir, "conversations_meta.json")
+      val jsonArr = org.json.JSONArray()
+      _conversations.value.forEach { sess ->
+        val obj = org.json.JSONObject().apply {
+          put("id", sess.id)
+          put("title", sess.title)
+          put("lastUpdated", sess.lastUpdated)
+          put("isStarred", sess.isStarred)
+          put("previewText", sess.previewText)
+        }
+        jsonArr.put(obj)
+      }
+      file.writeText(jsonArr.toString())
+    } catch (_: Exception) {}
   }
 
   private fun loadPersistedChatMessages() {
@@ -236,82 +349,124 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val cleanPrompt = prompt.trim()
     if (cleanPrompt.isBlank()) return
 
-    val project = _selectedProject.value ?: return
-
-    val userMsg = UiChatMessage(
-      role = MessageRole.USER,
-      content = cleanPrompt,
-      timestamp = System.currentTimeMillis()
-    )
-
-    val assistantMsgId = UUID.randomUUID().toString()
-    val assistantMsg = UiChatMessage(
-      id = assistantMsgId,
-      role = MessageRole.ASSISTANT,
-      content = "",
-      isRunning = true,
-      timestamp = System.currentTimeMillis()
-    )
-
-    _chatMessages.value = _chatMessages.value + userMsg + assistantMsg
-
-    // Persist new messages to Room database
     viewModelScope.launch {
+      val project = _selectedProject.value ?: run {
+        val existing = fileManager.listProjects()
+        val p = if (existing.isNotEmpty()) existing.first() else {
+          fileManager.createProject("Workspace", ProjectType.KOTLIN_ANDROID, "Active developer workspace.")
+        }
+        _selectedProject.value = p
+        p
+      }
+
+      // Ensure active conversation session
+      val currentId = _activeConversationId.value ?: run {
+        val newId = UUID.randomUUID().toString()
+        val newSess = ConversationSession(id = newId, title = cleanPrompt.take(32), previewText = cleanPrompt.take(50))
+        _conversations.value = listOf(newSess) + _conversations.value
+        _activeConversationId.value = newId
+        newId
+      }
+
+      // Update conversation title and preview
+      _conversations.value = _conversations.value.map { sess ->
+        if (sess.id == currentId) {
+          val newTitle = if (sess.title == "New Chat" || sess.title.isBlank()) cleanPrompt.take(32) else sess.title
+          sess.copy(title = newTitle, previewText = cleanPrompt.take(50), lastUpdated = System.currentTimeMillis())
+        } else sess
+      }
+      saveConversationsMeta()
+
+      val userMsg = UiChatMessage(
+        role = MessageRole.USER,
+        content = cleanPrompt,
+        timestamp = System.currentTimeMillis()
+      )
+
+      val assistantMsgId = UUID.randomUUID().toString()
+      val assistantMsg = UiChatMessage(
+        id = assistantMsgId,
+        role = MessageRole.ASSISTANT,
+        content = "",
+        status = MessageStatus.SUBMITTING,
+        currentStatusText = "Analyzing request and inspecting project...",
+        modelName = providerConfig.value.modelId,
+        isRunning = true,
+        timestamp = System.currentTimeMillis()
+      )
+
+      _chatMessages.value = _chatMessages.value + userMsg + assistantMsg
       chatRepository.saveMessage(userMsg)
-      chatRepository.saveMessage(assistantMsg)
-    }
 
-    // Start task in agent
-    agentEngine.startTask(cleanPrompt, project, providerConfig.value)
+      // Start task in agent
+      agentEngine.startTask(cleanPrompt, project, providerConfig.value)
 
-    // Collect updates and synchronize assistant message
-    viewModelScope.launch {
-      agentEngine.currentTask.collect { task ->
-        if (task == null) return@collect
+      // Collect updates and synchronize assistant message
+      val collectJob = launch {
+        agentEngine.currentTask.collect { task ->
+          if (task == null) return@collect
 
-        val isStillRunning = task.status == TaskStatus.PLANNING ||
-          task.status == TaskStatus.INSPECTING ||
-          task.status == TaskStatus.EDITING ||
-          task.status == TaskStatus.VERIFYING
+          val isStillRunning = task.status == TaskStatus.PLANNING ||
+            task.status == TaskStatus.INSPECTING ||
+            task.status == TaskStatus.EDITING ||
+            task.status == TaskStatus.VERIFYING
 
-        val content = when {
-          !task.summary.isNullOrBlank() -> task.summary!!
-          task.currentPlan.isNotBlank() -> task.currentPlan
-          else -> "Analyzing request..."
-        }
-
-        val modified = task.pendingChanges.map { it.relativePath }
-
-        var updatedMsg: UiChatMessage? = null
-        _chatMessages.value = _chatMessages.value.map { msg ->
-          if (msg.id == assistantMsgId) {
-            val updated = msg.copy(
-              content = content,
-              steps = task.steps,
-              modifiedFiles = modified,
-              isRunning = isStillRunning,
-              isError = task.status == TaskStatus.FAILED,
-              summary = task.summary
-            )
-            updatedMsg = updated
-            updated
-          } else {
-            msg
+          val msgStatus = when {
+            task.status == TaskStatus.COMPLETED -> MessageStatus.COMPLETED
+            task.status == TaskStatus.FAILED -> MessageStatus.ERROR
+            task.streamingDelta.isNotEmpty() || task.summary != null -> MessageStatus.STREAMING
+            else -> MessageStatus.SUBMITTING
           }
-        }
 
-        // Persist streaming/completed assistant message update to Room
-        updatedMsg?.let {
-          chatRepository.saveMessage(it)
-        }
+          val statusText = when {
+            isStillRunning && task.currentPlan.isNotBlank() -> task.currentPlan
+            isStillRunning -> "Generating response..."
+            else -> null
+          }
 
-        if (!isStillRunning) {
-          // Task completed or stopped: auto-refresh workspace files
-          val files = fileManager.listFiles(project)
-          if (modified.isNotEmpty()) {
-            val touched = files.firstOrNull { it.relativePath == modified.last() }
-            if (touched != null) {
-              openFile(touched)
+          // Content ONLY contains real answer or streaming delta - NEVER internal agent plans
+          val content = when {
+            !task.summary.isNullOrBlank() -> task.summary!!
+            task.streamingDelta.isNotBlank() -> task.streamingDelta
+            else -> ""
+          }
+
+          val modified = task.pendingChanges.map { it.relativePath }
+
+          var updatedMsg: UiChatMessage? = null
+          _chatMessages.value = _chatMessages.value.map { msg ->
+            if (msg.id == assistantMsgId) {
+              val updated = msg.copy(
+                content = content,
+                status = msgStatus,
+                currentStatusText = statusText,
+                steps = task.steps,
+                modifiedFiles = modified,
+                isRunning = isStillRunning,
+                isError = task.status == TaskStatus.FAILED,
+                summary = task.summary
+              )
+              updatedMsg = updated
+              updated
+            } else {
+              msg
+            }
+          }
+
+          // Only persist to Room when real response content has arrived or task completed
+          if (!isStillRunning || content.isNotBlank()) {
+            updatedMsg?.let {
+              chatRepository.saveMessage(it)
+            }
+          }
+
+          if (!isStillRunning) {
+            val files = fileManager.listFiles(project)
+            if (modified.isNotEmpty()) {
+              val touched = files.firstOrNull { it.relativePath == modified.last() }
+              if (touched != null) {
+                openFile(touched)
+              }
             }
           }
         }

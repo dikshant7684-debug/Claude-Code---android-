@@ -75,6 +75,11 @@ Tools:
    arguments: {"extension_id": "droid-git-pro", "capability_name": "git_atomic_commit", "arguments": {}}
 
 GUIDELINES:
+- When asked to write, generate, or improve an AI prompt, output the complete generated prompt inside a fenced block tagged with ```prompt ... ``` so it renders as a dedicated copyable prompt block.
+- When writing code, use the appropriate language tag (e.g. ```kotlin, ```python, ```json, ```yaml).
+- When providing shell/terminal commands, use ```bash.
+- For conversations, questions, and explanations, respond directly in clean markdown with clear paragraphs and lists.
+- Only invoke tools if the user explicitly asks to inspect, read, edit, or modify files in the workspace.
 - First, inspect or read relevant files to understand context before making edits.
 - Never guess file contents; always use read_file or search_files first.
 - Only invoke one tool at a time, wait for the tool result, then decide your next step.
@@ -216,7 +221,7 @@ GUIDELINES:
             if (result.diagnostics.isNotEmpty()) {
               appendLine("\nDiagnostics:")
               result.diagnostics.forEach { diag ->
-                val loc = if (diag.lineNumber != null) " (${diag.filePath}:${diag.lineNumber})" else ""
+                val loc = if (diag.line > 0) " (${diag.filePath}:${diag.line})" else ""
                 appendLine("[${diag.severity}] $loc ${diag.message}")
               }
             }

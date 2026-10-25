@@ -77,17 +77,17 @@ class PreferencesManager(private val context: Context) {
   }
 
   val providerConfigFlow: Flow<ProviderConfig> = context.dataStore.data.map { prefs ->
-    val typeName = prefs[Keys.PROVIDER_TYPE] ?: ProviderType.OPENAI.name
+    val typeName = prefs[Keys.PROVIDER_TYPE] ?: ProviderType.NVIDIA_NIM.name
     val providerType = try {
       ProviderType.valueOf(typeName)
     } catch (_: Exception) {
-      ProviderType.OPENAI
+      ProviderType.NVIDIA_NIM
     }
 
     ProviderConfig(
       providerType = providerType,
       baseUrl = prefs[Keys.BASE_URL] ?: providerType.defaultBaseUrl,
-      apiKey = prefs[Keys.API_KEY] ?: "",
+      apiKey = prefs[Keys.API_KEY] ?: "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",
       modelId = prefs[Keys.MODEL_ID] ?: providerType.defaultModel,
       temperature = prefs[Keys.TEMPERATURE] ?: 0.2f,
       maxTokens = prefs[Keys.MAX_TOKENS] ?: 4096,

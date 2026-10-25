@@ -45,8 +45,24 @@ class MarketplaceManager(
   }
 
   suspend fun ensureDefaultMarketplaces() = withContext(Dispatchers.IO) {
+    val officialClaude = MarketplaceSource(
+      id = "claude-plugins-official",
+      name = "Anthropic Claude Plugins Official",
+      sourceType = MarketplaceSourceType.GITHUB,
+      location = "https://github.com/anthropics/claude-plugins-official",
+      branch = "main",
+      ecosystem = EcosystemType.CLAUDE_CODE,
+      isEnabled = true,
+      validationStatus = ValidationStatus.VALID
+    )
+
+    // Ensure the requested official repo is always present as default
+    if (marketplaceDao.getMarketplaceById(officialClaude.id) == null) {
+      marketplaceDao.insertMarketplace(MarketplaceEntity.fromModel(officialClaude))
+    }
+
     val existing = marketplaceDao.getAllMarketplaces()
-    if (existing.isEmpty()) {
+    if (existing.size <= 1) {
       val defaults = listOf(
         MarketplaceSource(
           id = "droidcode-official",
@@ -54,15 +70,6 @@ class MarketplaceManager(
           sourceType = MarketplaceSourceType.DROIDCODE_NATIVE,
           location = "https://raw.githubusercontent.com/droidcode-org/marketplace/main/droidcode-marketplace.json",
           ecosystem = EcosystemType.DROIDCODE_NATIVE,
-          isEnabled = true,
-          validationStatus = ValidationStatus.VALID
-        ),
-        MarketplaceSource(
-          id = "claude-code-community",
-          name = "Claude Code Skills Repository",
-          sourceType = MarketplaceSourceType.GITHUB,
-          location = "https://github.com/anthropics/claude-code-skills",
-          ecosystem = EcosystemType.CLAUDE_CODE,
           isEnabled = true,
           validationStatus = ValidationStatus.VALID
         ),

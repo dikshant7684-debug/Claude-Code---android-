@@ -68,6 +68,9 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  androidResources {
+    noCompress += listOf("bin", "weights", "dat")
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

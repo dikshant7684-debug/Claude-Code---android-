@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
 class ClaudeCodeMarketplaceAdapter(
   private val httpClient: OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(20, TimeUnit.SECONDS)
+    .readTimeout(25, TimeUnit.SECONDS)
     .build()
 ) : MarketplaceAdapter {
 
@@ -28,7 +28,7 @@ class ClaudeCodeMarketplaceAdapter(
   override fun canHandle(source: MarketplaceSource): Boolean {
     if (source.ecosystem == EcosystemType.CLAUDE_CODE) return true
     val loc = source.location.lowercase()
-    return loc.contains("claude") || loc.contains("anthropic") || loc.contains("skills")
+    return loc.contains("claude") || loc.contains("anthropic") || loc.contains("skills") || loc.contains("plugins")
   }
 
   override suspend fun validate(source: MarketplaceSource): MarketplaceValidationResult = withContext(Dispatchers.IO) {
@@ -37,14 +37,14 @@ class ClaudeCodeMarketplaceAdapter(
       if (catalog.isNotEmpty()) {
         MarketplaceValidationResult(
           isValid = true,
-          message = "Valid Claude Code repository with ${catalog.size} extension(s) detected.",
+          message = "Valid Claude Code marketplace with ${catalog.size} real plugins & skills.",
           detectedEcosystem = EcosystemType.CLAUDE_CODE,
           itemCount = catalog.size
         )
       } else {
         MarketplaceValidationResult(
           isValid = false,
-          message = "Repository reachable but no valid Claude Code skills or manifests found.",
+          message = "Connected to repository but no valid Claude plugins or manifests found.",
           detectedEcosystem = EcosystemType.CLAUDE_CODE,
           itemCount = 0
         )
@@ -52,7 +52,7 @@ class ClaudeCodeMarketplaceAdapter(
     } catch (e: Exception) {
       MarketplaceValidationResult(
         isValid = false,
-        message = "Connection failed: ${e.message}",
+        message = "Validation failed: ${e.message}",
         detectedEcosystem = EcosystemType.CLAUDE_CODE,
         itemCount = 0
       )
@@ -61,18 +61,30 @@ class ClaudeCodeMarketplaceAdapter(
 
   override suspend fun fetchCatalog(source: MarketplaceSource): List<UniversalExtension> = withContext(Dispatchers.IO) {
     val items = mutableListOf<UniversalExtension>()
-    val rawUrl = resolveRawManifestUrl(source.location, source.branch)
+    val candidateUrls = resolveCandidateManifestUrls(source.location, source.branch)
 
-    val content = fetchUrlText(rawUrl)
+    var content: String? = null
+    for (url in candidateUrls) {
+      val res = fetchUrlText(url)
+      if (res != null && res.isNotBlank()) {
+        content = res
+        break
+      }
+    }
+
     if (content != null) {
-      // 1. Try parsing JSON catalog (e.g. marketplace.json, skills.json)
       try {
         val root = JSONObject(content)
-        val array = root.optJSONArray("skills") ?: root.optJSONArray("extensions") ?: root.optJSONArray("items")
+        // Official Anthropic marketplace.json has "plugins": [ ... ]
+        val array = root.optJSONArray("plugins")
+          ?: root.optJSONArray("skills")
+          ?: root.optJSONArray("extensions")
+          ?: root.optJSONArray("items")
+
         if (array != null) {
           for (i in 0 until array.length()) {
             val obj = array.getJSONObject(i)
-            items.add(parseUniversalExtension(source.id, obj))
+            items.add(parseOfficialPluginEntry(source.id, obj, source.location))
           }
         }
       } catch (_: Exception) {
@@ -81,7 +93,7 @@ class ClaudeCodeMarketplaceAdapter(
           val array = JSONArray(content)
           for (i in 0 until array.length()) {
             val obj = array.getJSONObject(i)
-            items.add(parseUniversalExtension(source.id, obj))
+            items.add(parseOfficialPluginEntry(source.id, obj, source.location))
           }
         } catch (_: Exception) {
           // If it's a SKILL.md directly
@@ -101,21 +113,132 @@ class ClaudeCodeMarketplaceAdapter(
     items
   }
 
+  /**
+   * Real-time downloader: fetches real agents, skills, commands, and schemas
+   * directly from Anthropic's claude-plugins-official repository or external Git sources.
+   */
   override suspend fun resolveExtensionBundle(source: MarketplaceSource, extension: UniversalExtension): ExtensionBundle = withContext(Dispatchers.IO) {
     val files = mutableMapOf<String, String>()
+    val pluginName = extension.id
 
-    if (extension.instructions.isNotBlank()) {
-      files["SKILL.md"] = buildSkillMarkdown(extension)
+    // Base raw URL for Anthropic official repo plugins
+    val officialBase = "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/plugins/$pluginName"
+
+    // 1. Download real plugin.json from GitHub
+    val remotePluginJson = fetchUrlText("$officialBase/.claude-plugin/plugin.json")
+    if (remotePluginJson != null) {
+      files[".claude-plugin/plugin.json"] = remotePluginJson
     }
 
-    // Try fetching remote files if original location is URL
-    if (extension.originalLocation.startsWith("http")) {
-      val remoteContent = fetchUrlText(extension.originalLocation)
-      if (remoteContent != null) {
-        files["SKILL.md"] = remoteContent
+    // 2. Download real README.md
+    val remoteReadme = fetchUrlText("$officialBase/README.md")
+    if (remoteReadme != null) {
+      files["README.md"] = remoteReadme
+    }
+
+    // 3. Download real Agent files if plugin contains agents
+    val commonAgentNames = listOf(
+      "code-architect.md",
+      "code-reviewer.md",
+      "code-explorer.md",
+      "pr-test-analyzer.md",
+      "silent-failure-hunter.md",
+      "comment-analyzer.md",
+      "code-simplifier.md",
+      "type-design-analyzer.md"
+    )
+    for (agentName in commonAgentNames) {
+      val agentContent = fetchUrlText("$officialBase/agents/$agentName")
+      if (agentContent != null && agentContent.isNotBlank()) {
+        files["agents/$agentName"] = agentContent
       }
     }
 
+    // 4. Download real Command files
+    val commonCommands = listOf(
+      "$pluginName.md",
+      "code-review.md",
+      "review.md",
+      "plan.md",
+      "test.md"
+    )
+    for (cmd in commonCommands) {
+      val cmdContent = fetchUrlText("$officialBase/commands/$cmd")
+      if (cmdContent != null && cmdContent.isNotBlank()) {
+        files["commands/$cmd"] = cmdContent
+      }
+    }
+
+    // 5. Download real Skills if present
+    val skillSubdirs = listOf("build-mcp-server", "build-mcp-app", "build-mcpb", pluginName)
+    for (sub in skillSubdirs) {
+      val skillContent = fetchUrlText("$officialBase/skills/$sub/SKILL.md")
+        ?: fetchUrlText("$officialBase/SKILL.md")
+      if (skillContent != null && skillContent.isNotBlank()) {
+        files["SKILL.md"] = skillContent
+        break
+      }
+    }
+
+    // 6. Download Hooks if present
+    val hooksJson = fetchUrlText("$officialBase/hooks/hooks.json")
+    if (hooksJson != null) {
+      files["hooks/hooks.json"] = hooksJson
+    }
+
+    // 7. If external repository (e.g. git-subdir or url)
+    if (extension.originalLocation.startsWith("{")) {
+      try {
+        val srcObj = JSONObject(extension.originalLocation)
+        val rawUrl = srcObj.optString("url")
+        val path = srcObj.optString("path")
+        val ref = srcObj.optString("ref", "main")
+        if (rawUrl.contains("github.com")) {
+          val cleanGit = rawUrl.removeSuffix(".git").removePrefix("https://github.com/")
+          val extReadme = fetchUrlText("https://raw.githubusercontent.com/$cleanGit/$ref/$path/README.md")
+            ?: fetchUrlText("https://raw.githubusercontent.com/$cleanGit/$ref/README.md")
+          if (extReadme != null) {
+            files["README.md"] = extReadme
+          }
+          val extSkill = fetchUrlText("https://raw.githubusercontent.com/$cleanGit/$ref/$path/SKILL.md")
+            ?: fetchUrlText("https://raw.githubusercontent.com/$cleanGit/$ref/SKILL.md")
+          if (extSkill != null) {
+            files["SKILL.md"] = extSkill
+          }
+        }
+      } catch (_: Exception) {}
+    }
+
+    // Build synthesized SKILL.md if not directly found
+    if (!files.containsKey("SKILL.md")) {
+      val primaryAgent = files.keys.firstOrNull { it.startsWith("agents/") }
+      val primaryContent = if (primaryAgent != null) {
+        files[primaryAgent] ?: extension.instructions
+      } else if (files.containsKey("README.md")) {
+        files["README.md"] ?: extension.instructions
+      } else {
+        extension.instructions.ifBlank { extension.description }
+      }
+
+      files["SKILL.md"] = """---
+name: ${extension.name}
+description: ${extension.description}
+version: ${extension.version}
+author: ${extension.author}
+ecosystem: Claude Code Official
+type: ${extension.type.name}
+---
+
+# ${extension.name}
+
+${extension.description}
+
+## Instructions & Guidelines
+$primaryContent
+"""
+    }
+
+    // Manifest JSON
     val manifestObj = JSONObject().apply {
       put("id", extension.id)
       put("name", extension.name)
@@ -124,6 +247,7 @@ class ClaudeCodeMarketplaceAdapter(
       put("type", extension.type.name)
       put("author", extension.author)
       put("permissions", JSONArray(extension.declaredPermissions.map { it.name }))
+      put("downloadedFiles", JSONArray(files.keys.toList()))
     }
     files["manifest.json"] = manifestObj.toString(2)
 
@@ -139,7 +263,7 @@ class ClaudeCodeMarketplaceAdapter(
           extensionId = installed.id,
           currentVersion = installed.version,
           latestVersion = remote.version,
-          changelog = "Updated capability definitions and instructions."
+          changelog = "Updated capability definitions and instructions directly from Anthropic official plugins."
         )
       } else null
     } catch (_: Exception) {
@@ -147,54 +271,57 @@ class ClaudeCodeMarketplaceAdapter(
     }
   }
 
-  private fun parseUniversalExtension(sourceId: String, obj: JSONObject): UniversalExtension {
-    val id = obj.optString("id", obj.optString("name").lowercase().replace(" ", "-"))
-    val name = obj.optString("name", id)
+  private fun parseOfficialPluginEntry(sourceId: String, obj: JSONObject, sourceLoc: String): UniversalExtension {
+    val name = obj.optString("name", "plugin")
+    val displayName = obj.optString("displayName", name)
     val description = obj.optString("description", "")
-    val author = obj.optString("author", "Community")
-    val version = obj.optString("version", "1.0.0")
-    val rawType = obj.optString("type", "SKILL")
-    val type = try { ExtensionType.valueOf(rawType.uppercase()) } catch (_: Exception) { ExtensionType.SKILL }
-    val instructions = obj.optString("instructions", obj.optString("prompt", ""))
+    val category = obj.optString("category", "development").lowercase()
 
-    val permissionsList = mutableListOf<DeclaredPermission>()
-    val permArray = obj.optJSONArray("permissions")
-    if (permArray != null) {
-      for (i in 0 until permArray.length()) {
-        try {
-          permissionsList.add(DeclaredPermission.valueOf(permArray.getString(i).uppercase()))
-        } catch (_: Exception) {}
-      }
-    }
-    if (permissionsList.isEmpty()) {
-      permissionsList.add(DeclaredPermission.FILESYSTEM_READ)
+    var authorName = "Anthropic"
+    val authorObj = obj.optJSONObject("author")
+    if (authorObj != null) {
+      authorName = authorObj.optString("name", "Anthropic")
+    } else if (obj.has("author")) {
+      authorName = obj.optString("author", "Anthropic")
     }
 
-    val tagsList = mutableListOf<String>()
-    val tagsArray = obj.optJSONArray("tags")
-    if (tagsArray != null) {
-      for (i in 0 until tagsArray.length()) {
-        tagsList.add(tagsArray.getString(i))
-      }
+    val sourceField = obj.opt("source")
+    val sourceJson = if (sourceField is JSONObject) sourceField.toString() else sourceField?.toString() ?: ""
+
+    // Detect extension type
+    val type = when {
+      name.contains("mcp", ignoreCase = true) || category.contains("mcp") || description.contains("MCP server", ignoreCase = true) -> ExtensionType.MCP_SERVER
+      name.contains("agent", ignoreCase = true) || description.contains("agents", ignoreCase = true) || name == "feature-dev" || name == "pr-review-toolkit" -> ExtensionType.AGENT
+      category == "skills" || name.contains("skill", ignoreCase = true) || description.contains("skills", ignoreCase = true) -> ExtensionType.SKILL
+      category == "automation" || name.contains("command", ignoreCase = true) -> ExtensionType.WORKFLOW
+      else -> ExtensionType.PLUGIN
     }
+
+    val permissionsList = mutableListOf(DeclaredPermission.FILESYSTEM_READ)
+    if (type == ExtensionType.AGENT || type == ExtensionType.PLUGIN) {
+      permissionsList.add(DeclaredPermission.FILESYSTEM_WRITE)
+    }
+    if (type == ExtensionType.MCP_SERVER || description.contains("API") || description.contains("cloud") || description.contains("remote")) {
+      permissionsList.add(DeclaredPermission.NETWORK_ACCESS)
+    }
+
+    val tags = mutableListOf("claude-official", category)
+    if (authorName.isNotBlank() && authorName != "Anthropic") tags.add(authorName.lowercase().replace(" ", "-"))
 
     return UniversalExtension(
-      id = id,
-      name = name,
+      id = name.lowercase().replace(" ", "-"),
+      name = displayName,
       description = description,
-      author = author,
-      version = version,
+      author = authorName,
+      version = obj.optString("version", "1.0.0"),
       marketplaceSourceId = sourceId,
-      originalLocation = obj.optString("url", ""),
+      originalLocation = sourceJson,
       type = type,
       ecosystem = EcosystemType.CLAUDE_CODE,
       compatibilityRequirements = listOf("Android 8.0+"),
       declaredPermissions = permissionsList,
-      dependencies = emptyList(),
-      instructions = instructions,
-      toolSchemaJson = obj.optString("tool_schema", ""),
-      license = obj.optString("license", "MIT"),
-      tags = tagsList
+      instructions = description,
+      tags = tags
     )
   }
 
@@ -203,7 +330,6 @@ class ClaudeCodeMarketplaceAdapter(
     var description = "Claude Code skill from $sourceName"
     val lines = md.lines()
 
-    // Parse YAML frontmatter if present
     if (lines.firstOrNull()?.trim() == "---") {
       var idx = 1
       while (idx < lines.size && lines[idx].trim() != "---") {
@@ -239,37 +365,22 @@ class ClaudeCodeMarketplaceAdapter(
     )
   }
 
-  private fun buildSkillMarkdown(ext: UniversalExtension): String {
-    return """---
-name: ${ext.name}
-description: ${ext.description}
-version: ${ext.version}
-author: ${ext.author}
-ecosystem: Claude Code
----
-
-# ${ext.name}
-
-${ext.description}
-
-## Instructions
-${ext.instructions}
-"""
-  }
-
-  private fun resolveRawManifestUrl(location: String, branch: String): String {
+  private fun resolveCandidateManifestUrls(location: String, branch: String): List<String> {
     var loc = location.trim()
     if (loc.endsWith(".git")) loc = loc.removeSuffix(".git")
     if (loc.contains("github.com") && !loc.contains("raw.githubusercontent.com")) {
-      // e.g. https://github.com/owner/repo -> https://raw.githubusercontent.com/owner/repo/main/marketplace.json
       val parts = loc.removePrefix("https://").removePrefix("http://").split("/")
       if (parts.size >= 3) {
         val owner = parts[1]
         val repo = parts[2]
-        return "https://raw.githubusercontent.com/$owner/$repo/$branch/skills.json"
+        return listOf(
+          "https://raw.githubusercontent.com/$owner/$repo/$branch/.claude-plugin/marketplace.json",
+          "https://raw.githubusercontent.com/$owner/$repo/$branch/marketplace.json",
+          "https://raw.githubusercontent.com/$owner/$repo/$branch/skills.json"
+        )
       }
     }
-    return loc
+    return listOf(loc)
   }
 
   private fun fetchUrlText(url: String): String? {
@@ -303,43 +414,43 @@ ${ext.instructions}
   private fun getBuiltinClaudeSkills(sourceId: String): List<UniversalExtension> {
     return listOf(
       UniversalExtension(
-        id = "claude-code-architect",
-        name = "Architecture & Clean Patterns",
-        description = "Teaches the agent to structure code using Clean Architecture, MVVM, and unidirectional data flow.",
-        author = "Anthropic Claude Team",
-        version = "1.2.0",
-        marketplaceSourceId = sourceId,
-        type = ExtensionType.SKILL,
-        ecosystem = EcosystemType.CLAUDE_CODE,
-        declaredPermissions = listOf(DeclaredPermission.FILESYSTEM_READ),
-        instructions = "When analyzing or proposing code changes, structure files cleanly following Clean Architecture principles. Decouple domain models from view components, use immutable state, and ensure every public interface has clear contracts.",
-        tags = listOf("architecture", "design-patterns", "clean-code")
-      ),
-      UniversalExtension(
-        id = "claude-test-driven-development",
-        name = "Test-Driven Engineering",
-        description = "Strict TDD workflow: inspect requirements, write unit tests first, verify edge cases, and run test suites.",
-        author = "Claude Community",
-        version = "1.1.0",
-        marketplaceSourceId = sourceId,
-        type = ExtensionType.SKILL,
-        ecosystem = EcosystemType.CLAUDE_CODE,
-        declaredPermissions = listOf(DeclaredPermission.FILESYSTEM_READ, DeclaredPermission.COMMAND_EXECUTION),
-        instructions = "Prioritize writing comprehensive unit tests for all business logic. When fixing bugs, first formulate a reproduction test case that fails, then make minimal surgical edits to pass.",
-        tags = listOf("testing", "tdd", "unit-test")
-      ),
-      UniversalExtension(
-        id = "claude-security-auditor",
-        name = "Security & Vulnerability Scanner",
-        description = "Detects OWASP top 10 risks, secret leaks, path traversal, and unsafe deserialization.",
-        author = "Claude Security SIG",
-        version = "1.3.1",
+        id = "feature-dev",
+        name = "Feature Development",
+        description = "Designs feature architectures and implementation blueprints with specialized agents.",
+        author = "Anthropic",
+        version = "1.0.0",
         marketplaceSourceId = sourceId,
         type = ExtensionType.AGENT,
         ecosystem = EcosystemType.CLAUDE_CODE,
+        declaredPermissions = listOf(DeclaredPermission.FILESYSTEM_READ, DeclaredPermission.FILESYSTEM_WRITE),
+        instructions = "Analyze codebase patterns, formulate blueprints, verify implementation details, and produce surgical edits with code-architect, code-explorer, and code-reviewer agents.",
+        tags = listOf("claude-official", "development", "agents")
+      ),
+      UniversalExtension(
+        id = "code-review",
+        name = "Automated Code Review",
+        description = "Automated code review for pull requests and code changes with confidence-based scoring.",
+        author = "Anthropic",
+        version = "1.0.0",
+        marketplaceSourceId = sourceId,
+        type = ExtensionType.PLUGIN,
+        ecosystem = EcosystemType.CLAUDE_CODE,
         declaredPermissions = listOf(DeclaredPermission.FILESYSTEM_READ),
-        instructions = "Act as an expert application security auditor. Scan source files for hardcoded secrets, injection vulnerabilities, unvalidated inputs, and permission over-privileging before approving any code change.",
-        tags = listOf("security", "audit", "owasp")
+        instructions = "Review code diffs for adherence to project guidelines, clean architecture, edge case handling, and OWASP security recommendations.",
+        tags = listOf("claude-official", "development", "review")
+      ),
+      UniversalExtension(
+        id = "mcp-server-dev",
+        name = "MCP Server Development",
+        description = "Official skills for building, testing, and debugging Model Context Protocol servers.",
+        author = "Anthropic",
+        version = "1.0.0",
+        marketplaceSourceId = sourceId,
+        type = ExtensionType.MCP_SERVER,
+        ecosystem = EcosystemType.CLAUDE_CODE,
+        declaredPermissions = listOf(DeclaredPermission.NETWORK_ACCESS, DeclaredPermission.FILESYSTEM_READ),
+        instructions = "Build and integrate Model Context Protocol (MCP) servers, implement tool endpoints, resources, and prompt definitions according to MCP specification.",
+        tags = listOf("claude-official", "development", "mcp")
       )
     )
   }

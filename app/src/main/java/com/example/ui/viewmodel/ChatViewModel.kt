@@ -16,13 +16,14 @@ import java.util.UUID
 data class ChatUiState(
   val messages: List<UiChatMessage> = emptyList(),
   val inputText: String = "",
-  val selectedModel: String = "GPT-4o",
+  val selectedModel: String = "Nemotron 30B (Low Latency)",
   val isLoading: Boolean = false,
   val currentTask: AgentTask? = null,
   val availableModels: List<String> = listOf(
-    "GPT-4o",
+    "Nemotron 30B (Low Latency)",
+    "GLM-5.3 Flash",
     "Claude 3.7 Sonnet",
-    "Claude 3.5 Sonnet",
+    "GPT-4o",
     "Gemini 2.0 Flash",
     "Llama 3.2"
   )
@@ -60,6 +61,8 @@ class ChatViewModel(
         vm.providerConfig.collect { config ->
           if (config.modelId.isNotBlank()) {
             val displayName = when {
+              config.modelId.contains("nemotron", ignoreCase = true) -> "Nemotron 30B (Low Latency)"
+              config.modelId.contains("glm", ignoreCase = true) -> "GLM-5.3 Flash"
               config.modelId.contains("gpt-4o", ignoreCase = true) -> "GPT-4o"
               config.modelId.contains("3-7-sonnet", ignoreCase = true) -> "Claude 3.7 Sonnet"
               config.modelId.contains("3-5-sonnet", ignoreCase = true) -> "Claude 3.5 Sonnet"
@@ -75,7 +78,7 @@ class ChatViewModel(
       viewModelScope.launch {
         vm.fetchedModels.collect { fetched ->
           if (fetched.isNotEmpty()) {
-            val combined = (fetched + listOf("GPT-4o", "Claude 3.7 Sonnet", "Claude 3.5 Sonnet", "Gemini 2.0 Flash", "Llama 3.2")).distinct()
+            val combined = (fetched + listOf("Nemotron 30B (Low Latency)", "GLM-5.3 Flash", "Claude 3.7 Sonnet", "GPT-4o", "Gemini 2.0 Flash", "Llama 3.2")).distinct()
             _uiState.update { it.copy(availableModels = combined) }
           }
         }
@@ -91,6 +94,8 @@ class ChatViewModel(
     _uiState.update { it.copy(selectedModel = model) }
     mainViewModel?.let { vm ->
       val modelId = when (model) {
+        "Nemotron 30B (Low Latency)" -> "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+        "GLM-5.3 Flash" -> "z-ai/glm-5.3-flash"
         "GPT-4o" -> "gpt-4o"
         "Claude 3.7 Sonnet" -> "claude-3-7-sonnet-20250219"
         "Claude 3.5 Sonnet" -> "claude-3-5-sonnet-20241022"

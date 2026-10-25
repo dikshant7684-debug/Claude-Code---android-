@@ -268,4 +268,30 @@ class UniversalMarketplaceTest {
     assertEquals("droid-git-pro", records.first().extensionId)
     assertEquals("SUCCESS", records.first().outcome)
   }
+
+  @Test
+  fun testRealAnthropicPluginResolution() = runBlocking {
+    val claudeAdapter = ClaudeCodeMarketplaceAdapter()
+    val source = MarketplaceSource(
+      id = "claude-plugins-official",
+      name = "Anthropic Claude Plugins Official",
+      sourceType = MarketplaceSourceType.GITHUB,
+      location = "https://github.com/anthropics/claude-plugins-official",
+      ecosystem = EcosystemType.CLAUDE_CODE
+    )
+
+    val extension = UniversalExtension(
+      id = "feature-dev",
+      name = "Feature Development",
+      description = "Designs feature architectures",
+      marketplaceSourceId = source.id,
+      type = ExtensionType.AGENT,
+      ecosystem = EcosystemType.CLAUDE_CODE
+    )
+
+    val bundle = claudeAdapter.resolveExtensionBundle(source, extension)
+    assertNotNull(bundle)
+    assertTrue("Bundle files should be populated", bundle.files.isNotEmpty())
+    assertTrue("Should contain manifest.json", bundle.files.containsKey("manifest.json"))
+  }
 }

@@ -102,6 +102,8 @@ data class AgentTask(
   val userPrompt: String,
   val status: TaskStatus = TaskStatus.IDLE,
   val currentPlan: String = "",
+  val currentActivity: String = "",
+  val streamingDelta: String = "",
   val steps: List<AgentStep> = emptyList(),
   val pendingChanges: List<FileChange> = emptyList(),
   val createdTimestamp: Long = System.currentTimeMillis(),
@@ -110,16 +112,17 @@ data class AgentTask(
 )
 
 enum class ProviderType(val displayName: String, val defaultBaseUrl: String, val defaultModel: String) {
+  NVIDIA_NIM("NVIDIA NIM (Low Latency)", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"),
   OPENAI("OpenAI Compatible", "https://api.openai.com/v1", "gpt-4o"),
   ANTHROPIC("Anthropic Compatible", "https://api.anthropic.com/v1", "claude-3-7-sonnet-20250219"),
   CUSTOM("Custom / Ollama / Local", "http://10.0.2.2:11434/v1", "llama3.2")
 }
 
 data class ProviderConfig(
-  val providerType: ProviderType = ProviderType.OPENAI,
-  val baseUrl: String = ProviderType.OPENAI.defaultBaseUrl,
-  val apiKey: String = "",
-  val modelId: String = ProviderType.OPENAI.defaultModel,
+  val providerType: ProviderType = ProviderType.NVIDIA_NIM,
+  val baseUrl: String = ProviderType.NVIDIA_NIM.defaultBaseUrl,
+  val apiKey: String = "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",
+  val modelId: String = ProviderType.NVIDIA_NIM.defaultModel,
   val temperature: Float = 0.2f,
   val maxTokens: Int = 4096,
   val isStreaming: Boolean = true,
@@ -149,15 +152,35 @@ enum class MessageRole {
   SYSTEM
 }
 
+enum class MessageStatus {
+  SUBMITTING,
+  STREAMING,
+  COMPLETED,
+  ERROR
+}
+
 data class UiChatMessage(
   val id: String = java.util.UUID.randomUUID().toString(),
   val role: MessageRole,
   val content: String,
   val timestamp: Long = System.currentTimeMillis(),
+  val status: MessageStatus = MessageStatus.COMPLETED,
+  val currentStatusText: String? = null,
+  val modelName: String? = null,
   val steps: List<AgentStep> = emptyList(),
   val modifiedFiles: List<String> = emptyList(),
   val isRunning: Boolean = false,
   val isError: Boolean = false,
   val summary: String? = null
 )
+
+data class ConversationSession(
+  val id: String = java.util.UUID.randomUUID().toString(),
+  val title: String,
+  val lastUpdated: Long = System.currentTimeMillis(),
+  val isStarred: Boolean = false,
+  val previewText: String = "",
+  val messageCount: Int = 0
+)
+
 

@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -137,6 +139,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.MessageRole
 import com.example.data.model.UiChatMessage
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.example.R
+import com.example.ui.formatting.SmartMessageBody
 import com.example.ui.theme.DarkUserBubble
 import com.example.ui.theme.DarkUserBubbleBorder
 import com.example.ui.theme.DroidCodeTheme
@@ -168,6 +174,7 @@ fun ChatScreen(
   viewModel: MainViewModel,
   onNavigateToWorkspace: () -> Unit = {},
   onNavigateToSettings: () -> Unit = {},
+  onOpenDrawer: () -> Unit = {},
   onTabSelected: (DroidNavTab) -> Unit = {},
   modifier: Modifier = Modifier
 ) {
@@ -187,6 +194,7 @@ fun ChatScreen(
       onNavigateToWorkspace()
     },
     onNavigateToSettings = onNavigateToSettings,
+    onOpenDrawer = onOpenDrawer,
     currentTab = DroidNavTab.CHAT,
     onTabSelected = { tab ->
       when (tab) {
@@ -213,6 +221,7 @@ fun ChatScreenContent(
   onCancelTask: () -> Unit,
   onOpenFile: (String) -> Unit,
   onNavigateToSettings: () -> Unit,
+  onOpenDrawer: () -> Unit = {},
   onRegenerate: (String) -> Unit = {},
   currentTab: DroidNavTab = DroidNavTab.CHAT,
   onTabSelected: (DroidNavTab) -> Unit = {},
@@ -231,7 +240,8 @@ fun ChatScreenContent(
     topBar = {
       ChatTopAppBar(
         selectedModel = uiState.selectedModel,
-        onNavigateToSettings = onNavigateToSettings
+        onNavigateToSettings = onNavigateToSettings,
+        onOpenDrawer = onOpenDrawer
       )
     }
   ) { paddingValues ->
@@ -267,10 +277,14 @@ fun ChatScreenContent(
                 keyboardController?.show()
               }
             )
-          } else {
+            val currentStatus = uiState.currentTask?.currentActivity?.takeIf { it.isNotBlank() }
+              ?: uiState.currentTask?.currentPlan?.takeIf { it.isNotBlank() }
+              ?: "Generating response..."
             MessagesList(
               messages = uiState.messages,
               isLoading = uiState.isLoading,
+              statusText = currentStatus,
+              modelName = uiState.selectedModel,
               onOpenFile = onOpenFile,
               onCancelTask = onCancelTask,
               onRegenerate = onRegenerate
@@ -314,9 +328,25 @@ fun ChatScreenContent(
 fun ChatTopAppBar(
   selectedModel: String,
   onNavigateToSettings: () -> Unit,
+  onOpenDrawer: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
   TopAppBar(
+    navigationIcon = {
+      IconButton(
+        onClick = onOpenDrawer,
+        modifier = Modifier
+          .size(48.dp)
+          .testTag("chat_open_drawer_btn")
+      ) {
+        Icon(
+          imageVector = Icons.Default.Menu,
+          contentDescription = "Open Drawer",
+          tint = MaterialTheme.colorScheme.onSurface,
+          modifier = Modifier.size(24.dp)
+        )
+      }
+    },
     title = {
       Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -325,17 +355,15 @@ fun ChatTopAppBar(
         // Logo Brand Icon
         Box(
           modifier = Modifier
-            .size(34.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primaryContainer),
           contentAlignment = Alignment.Center
         ) {
-          Text(
-            text = "C",
-            fontFamily = FontFamily.Serif,
-            fontWeight = FontWeight.Bold,
-            fontSize = 18.sp,
-            color = MaterialTheme.colorScheme.primary
+          Image(
+            painter = painterResource(id = R.drawable.cat_logo),
+            contentDescription = "App Logo",
+            modifier = Modifier.size(24.dp).clip(CircleShape)
           )
         }
 
@@ -415,22 +443,15 @@ fun EmptyChatState(
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center
   ) {
-    // Brand Terracotta emblem
-    Box(
+    // Brand Cat emblem
+    Image(
+      painter = painterResource(id = R.drawable.cat_logo),
+      contentDescription = "DroidCode Logo",
       modifier = Modifier
-        .size(56.dp)
+        .size(64.dp)
         .clip(CircleShape)
-        .background(MaterialTheme.colorScheme.primaryContainer),
-      contentAlignment = Alignment.Center
-    ) {
-      Text(
-        text = "C",
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Bold,
-        fontSize = 30.sp,
-        color = MaterialTheme.colorScheme.primary
-      )
-    }
+        .testTag("app_logo_image")
+    )
 
     Spacer(modifier = Modifier.height(16.dp))
 
@@ -997,6 +1018,8 @@ fun MessagesList(
   onOpenFile: (String) -> Unit,
   onCancelTask: () -> Unit,
   onRegenerate: (String) -> Unit = {},
+  statusText: String = "Generating response...",
+  modelName: String = "Claude Code",
   modifier: Modifier = Modifier
 ) {
   val listState = rememberLazyListState()
@@ -1026,6 +1049,7 @@ fun MessagesList(
 
           AssistantMessageItem(
             message = message,
+            userPrompt = previousUserPrompt,
             onOpenFile = onOpenFile,
             ttsState = ttsState,
             onRegenerate = { onRegenerate(previousUserPrompt) }
@@ -1037,7 +1061,11 @@ fun MessagesList(
 
     if (isLoading) {
       item {
-        LoadingIndicatorRow(onCancelTask = onCancelTask)
+        LoadingIndicatorRow(
+          statusText = statusText,
+          modelName = modelName,
+          onCancelTask = onCancelTask
+        )
       }
     }
   }
@@ -1077,12 +1105,13 @@ fun UserMessageBubble(
 }
 
 /**
- * Assistant Message: Full width, markdown-rendered plain text and formatted code blocks,
- * with horizontal action toolbar directly below the message content.
+ * Assistant Message: Full width, smart response formatted text, monospace prompt blocks,
+ * syntax highlighted code blocks, tables, and horizontal action toolbar.
  */
 @Composable
 fun AssistantMessageItem(
   message: UiChatMessage,
+  userPrompt: String = "",
   onOpenFile: (String) -> Unit,
   ttsState: TtsState,
   onRegenerate: () -> Unit = {},
@@ -1100,31 +1129,24 @@ fun AssistantMessageItem(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-      Box(
+      Image(
+        painter = painterResource(id = R.drawable.cat_logo),
+        contentDescription = "DroidCode Assistant",
         modifier = Modifier
           .size(28.dp)
           .clip(CircleShape)
-          .background(MaterialTheme.colorScheme.primaryContainer),
-        contentAlignment = Alignment.Center
-      ) {
-        Text(
-          text = "C",
-          fontFamily = FontFamily.Serif,
-          fontWeight = FontWeight.Bold,
-          fontSize = 14.sp,
-          color = MaterialTheme.colorScheme.primary
-        )
-      }
+      )
       Text(
-        text = "Claude Code",
+        text = "DroidCode",
         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
         color = MaterialTheme.colorScheme.onSurface
       )
     }
 
-    // Render text and code blocks
-    MarkdownMessageBody(
+    // Smart Response Formatting: Prompts, Code, Commands, Tables, Lists & Normal text
+    SmartMessageBody(
       content = message.content,
+      userPrompt = userPrompt,
       onOpenFile = onOpenFile
     )
 
@@ -1261,6 +1283,8 @@ fun CodeBlockCard(
  */
 @Composable
 fun LoadingIndicatorRow(
+  statusText: String = "Generating response...",
+  modelName: String = "Claude Code",
   onCancelTask: () -> Unit,
   modifier: Modifier = Modifier
 ) {
@@ -1272,20 +1296,26 @@ fun LoadingIndicatorRow(
     horizontalArrangement = Arrangement.spacedBy(10.dp)
   ) {
     CircularProgressIndicator(
-      modifier = Modifier.size(20.dp),
+      modifier = Modifier.size(18.dp),
       strokeWidth = 2.dp,
       color = MaterialTheme.colorScheme.primary
     )
-    Text(
-      text = "Claude Code is generating...",
-      style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-      color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    Spacer(modifier = Modifier.weight(1f))
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = statusText,
+        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+        color = MaterialTheme.colorScheme.onSurface
+      )
+      Text(
+        text = modelName,
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+    }
     IconButton(
       onClick = onCancelTask,
       modifier = Modifier
-        .size(48.dp)
+        .size(40.dp)
         .semantics { contentDescription = "Cancel active generation task" }
     ) {
       Icon(

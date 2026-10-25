@@ -37,6 +37,7 @@ data class ChatMessageEntity(
       role = messageRole,
       content = content,
       timestamp = timestamp,
+      status = if (isError) com.example.data.model.MessageStatus.ERROR else com.example.data.model.MessageStatus.COMPLETED,
       steps = emptyList(),
       modifiedFiles = files,
       isRunning = false,
